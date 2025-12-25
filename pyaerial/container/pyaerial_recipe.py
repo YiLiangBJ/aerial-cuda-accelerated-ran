@@ -22,6 +22,8 @@ $ hpccm
     --userarg AERIAL_BASE_IMAGE
     --userarg TENSORFLOW_IMAGE
 """
+import os
+
 AERIAL_BASE_IMAGE = USERARG.get("AERIAL_BASE_IMAGE")
 if AERIAL_BASE_IMAGE is None:
     raise RuntimeError("User argument AERIAL_BASE_IMAGE must be set")
@@ -122,5 +124,15 @@ elif cpu_target == 'aarch64':
 PyAerial += shell(commands=[
     'rm -rf /home/aerial/.cache',
     ])
+# read host uid/gid from build environment (fallback to build user's uid/gid)
+_host_uid = int(os.environ.get('HOST_UID', os.getuid()))
+_host_gid = int(os.environ.get('HOST_GID', os.getgid()))
+
+# ensure virtualenv ownership matches host UID/GID after all installs (run as root)
+PyAerial += user(user='root')
+PyAerial += shell(commands=[
+    f'chown -R {_host_uid}:{_host_gid} /opt/venv || true',
+    ])
+PyAerial += user(user='aerial')
 PyAerial += workdir(directory='/home/aerial')
 PyAerial += raw(docker='CMD ["/bin/bash"]')
