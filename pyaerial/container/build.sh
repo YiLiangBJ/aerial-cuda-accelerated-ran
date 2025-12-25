@@ -107,8 +107,8 @@ fi
 hpccm --recipe pyaerial/container/pyaerial_recipe.py --cpu-target $CPU_TARGET --format docker --userarg AERIAL_BASE_IMAGE=$AERIAL_BASE_IMAGE TENSORFLOW_IMAGE=$TENSORFLOW_IMAGE > Dockerfile_tmp
 if [[ -n "$AERIAL_BUILDER" ]]
 then
-    docker buildx build --builder $AERIAL_BUILDER --pull --push --progress plain --platform $AERIAL_PLATFORM -t ${PYAERIAL_IMAGE}-${TARGETARCH} -f Dockerfile_tmp .
+    docker buildx build --builder $AERIAL_BUILDER --pull --push --progress plain --platform $AERIAL_PLATFORM -t ${PYAERIAL_IMAGE}-${TARGETARCH} -f Dockerfile_tmp --build-arg http_proxy="http://proxy-dmz.intel.com:912" --build-arg https_proxy="http://proxy-dmz.intel.com:912" .
 else
-    DOCKER_BUILDKIT=1 docker build --network host --platform $AERIAL_PLATFORM -t ${PYAERIAL_IMAGE}-${TARGETARCH} -f Dockerfile_tmp .
+    DOCKER_BUILDKIT=1 docker build --network host --platform $AERIAL_PLATFORM -t ${PYAERIAL_IMAGE}-${TARGETARCH} -f Dockerfile_tmp --build-arg http_proxy="http://proxy-dmz.intel.com:912" --build-arg https_proxy="http://proxy-dmz.intel.com:912" .
 fi
 rm Dockerfile_tmp
