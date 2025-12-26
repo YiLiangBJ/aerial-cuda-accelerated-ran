@@ -37,10 +37,16 @@ fi
 # Generate TRT models.
 export CUDA_MODULE_LOADING=LAZY
 
-mkdir $HOME/models
+# Configurable model output directory (default to $HOME/models)
+MODEL_DIR="${MODEL_DIR:-$HOME/models}"
+if [ -e "$MODEL_DIR" ] && [ ! -d "$MODEL_DIR" ]; then
+    echo "ERROR: $MODEL_DIR exists but is not a directory. Please remove or rename it and retry." >&2
+    exit 1
+fi
+mkdir -p "$MODEL_DIR"
 
 trtexec --onnx=$PROJECT_ROOT/models/llrnet.onnx \
-        --saveEngine=$HOME/models/llrnet.trt \
+        --saveEngine=$MODEL_DIR/llrnet.trt \
         --skipInference \
         --minShapes=input:1x2 \
         --optShapes=input:12345x2 \
@@ -49,7 +55,7 @@ trtexec --onnx=$PROJECT_ROOT/models/llrnet.onnx \
         --outputIOFormats=fp32:chw
 
 trtexec --onnx=$PROJECT_ROOT/models/neural_rx.onnx \
-        --saveEngine=$HOME/models/neural_rx.trt \
+        --saveEngine=$MODEL_DIR/neural_rx.trt \
         --skipInference \
         --shapes=rx_slot_real:1x3276x12x4,rx_slot_imag:1x3276x12x4,h_hat_real:1x4914x1x4,h_hat_imag:1x4914x1x4
 
@@ -58,7 +64,7 @@ pushd tests > /dev/null
 python3 -m pytest -o cache_dir=$HOME/.pytest_cache -sv
 popd > /dev/null
 
-rm -rf $HOME/models
+rm -rf "$MODEL_DIR"
 
 #echo pyAerial: Run C++ wrapper tests...
 #CUPHY_ROOT=$(dirname $PROJECT_ROOT)
