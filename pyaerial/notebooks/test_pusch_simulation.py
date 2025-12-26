@@ -38,6 +38,18 @@ gpus = tf.config.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
 # Simulation parameters.
+random_seed = 42
+np.random.seed(random_seed)
+try:
+    import cupy as _cp
+    _cp.random.seed(random_seed)
+except Exception:
+    pass
+try:
+    tf.random.set_seed(random_seed)
+except Exception:
+    pass
+
 use_cupy = True  # Use NumPy or CuPy - with NumPy there are H2D/D2H copies between every PUSCH receiver component, resulting in slower simulation.
 esno_db_range = np.arange(-5.6, -4.4, 0.2)
 num_slots = 10000
@@ -257,14 +269,62 @@ def apply_channel(tx_tensor, No):
     rx_tensor = tf.transpose(rx_tensor, (2, 1, 0))
     return rx_tensor
 
-cfg = dict(
-    num_prbs=num_prbs,
-    num_symbols=num_symbols,
-    num_rx_ant=num_rx_ant,
-    mcs_index=mcs_index,
-    mcs_table=mcs_table,
-    use_cupy=bool(use_cupy)
-)
+cfg = {
+    'Sim': {
+        'use_cupy': bool(use_cupy),
+        'esno_db_range': np.array(esno_db_range),
+        'num_slots': num_slots,
+        'min_num_tb_errors': min_num_tb_errors,
+        'random_seed': int(random_seed)
+    },
+    'Frame': {
+        'num_ofdm_symbols': num_ofdm_symbols,
+        'fft_size': fft_size,
+        'cyclic_prefix_length': cyclic_prefix_length,
+        'subcarrier_spacing': subcarrier_spacing,
+        'num_guard_subcarriers': list(num_guard_subcarriers),
+        'num_slots_per_frame': num_slots_per_frame
+    },
+    'System': {
+        'num_tx_ant': num_tx_ant,
+        'num_rx_ant': num_rx_ant,
+        'cell_id': cell_id,
+        'enable_pusch_tdi': enable_pusch_tdi,
+        'eq_coeff_algo': eq_coeff_algo
+    },
+    'PUSCH': {
+        'rnti': rnti,
+        'scid': scid,
+        'data_scid': data_scid,
+        'layers': layers,
+        'mcs_index': mcs_index,
+        'mcs_table': mcs_table,
+        'dmrs_ports': dmrs_ports,
+        'start_prb': start_prb,
+        'num_prbs': num_prbs,
+        'start_sym': start_sym,
+        'num_symbols': num_symbols,
+        'dmrs_scrm_id': dmrs_scrm_id,
+        'dmrs_syms': list(dmrs_syms),
+        'dmrs_max_len': dmrs_max_len,
+        'dmrs_add_ln_pos': dmrs_add_ln_pos,
+        'num_dmrs_cdm_grps_no_data': num_dmrs_cdm_grps_no_data,
+        'precoding_matrix': None,
+        'tb_size_bits': int(tb_size)
+    },
+    'Channel': {
+        'carrier_frequency': carrier_frequency,
+        'delay_spread': delay_spread,
+        'link_direction': link_direction,
+        'channel_model': channel_model,
+        'speed': speed
+    },
+    'Algo': {
+        'ldpc_kernel_launch': str(PuschLdpcKernelLaunch.PUSCH_RX_LDPC_STREAM_SEQUENTIAL),
+        'use_cupy': bool(use_cupy)
+    }
+}
+
 monitor = SimulationMonitor(cases, esno_db_range, config=cfg)
 exec_times = dict.fromkeys(cases, 0)
 

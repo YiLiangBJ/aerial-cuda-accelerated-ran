@@ -41,12 +41,13 @@ def save_results_mat(out_dir, base_name, monitor, config=None, fmt='mat'):
         config = {}
     meta['config'] = config
 
+    ts = time.strftime('%Y%m%dT%H%M%S')
     if fmt == 'mat':
         try:
             from scipy.io import savemat
         except Exception as e:
             raise RuntimeError('scipy required to save mat files') from e
-        out_path = os.path.join(out_dir, base_name + '.mat')
+        out_path = os.path.join(out_dir, f"{base_name}_{ts}.mat")
         mat_dict = {
             'esno_db_range': esno,
             'metadata': meta
@@ -57,7 +58,7 @@ def save_results_mat(out_dir, base_name, monitor, config=None, fmt='mat'):
         savemat(out_path, mat_dict)
         return out_path
     else:
-        out_path = os.path.join(out_dir, base_name + '.npz')
+        out_path = os.path.join(out_dir, f"{base_name}_{ts}.npz")
         np.savez(out_path, esno_db_range=esno, **{('bler_' + k): v for k, v in bler.items()})
         # save metadata as json sidecar
         with open(out_path + '.meta.json', 'w') as f:
