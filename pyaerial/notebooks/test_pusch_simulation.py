@@ -257,7 +257,15 @@ def apply_channel(tx_tensor, No):
     rx_tensor = tf.transpose(rx_tensor, (2, 1, 0))
     return rx_tensor
 
-monitor = SimulationMonitor(cases, esno_db_range)
+cfg = dict(
+    num_prbs=num_prbs,
+    num_symbols=num_symbols,
+    num_rx_ant=num_rx_ant,
+    mcs_index=mcs_index,
+    mcs_table=mcs_table,
+    use_cupy=bool(use_cupy)
+)
+monitor = SimulationMonitor(cases, esno_db_range, config=cfg)
 exec_times = dict.fromkeys(cases, 0)
 
 # Loop the Es/No range.
@@ -329,3 +337,14 @@ exec_times = {k : v / (num_slots * len(esno_db_range)) for k, v in exec_times.it
 print("Average execution times:")
 for name, exec_time in exec_times.items():
     print(f"{name}: {exec_time * 1000: .2f} ms.")
+
+# Save results using monitor.save
+try:
+    out = monitor.save('results', 'pusch_simulation_results', fmt='mat')
+    print('Saved results to', out)
+except Exception as e:
+    try:
+        out = monitor.save('results', 'pusch_simulation_results', fmt='npz')
+        print('Saved results to', out)
+    except Exception as e2:
+        print('Could not save results:', e2)

@@ -346,7 +346,16 @@ def apply_channel(tx_tensor, No):
     return rx_tensor
 
 cases = ["PUSCH Rx", "Neural Rx"]
-monitor = SimulationMonitor(cases, esno_db_range)
+# Build configuration dict to record simulation and algorithm settings
+cfg = dict(
+    num_prbs=num_prbs,
+    num_symbols=num_symbols,
+    num_rx_ant=num_rx_ant,
+    mcs_index=mcs_index,
+    mcs_table=mcs_table,
+    use_trt=True
+)
+monitor = SimulationMonitor(cases, esno_db_range, config=cfg)
 
 # Loop the Es/No range.
 bler = []
@@ -421,3 +430,14 @@ for esno_db in esno_db_range:
     
     monitor.finish_step(num_tbs=slot_idx + 1, num_tb_errors=num_tb_errors)  
 monitor.finish()
+
+# Save results using monitor.save (raises on fatal errors)
+try:
+    out = monitor.save('results', 'neural_receiver_results', fmt='mat')
+    print('Saved results to', out)
+except Exception as e:
+    try:
+        out = monitor.save('results', 'neural_receiver_results', fmt='npz')
+        print('Saved results to', out)
+    except Exception as e2:
+        print('Could not save results:', e2)

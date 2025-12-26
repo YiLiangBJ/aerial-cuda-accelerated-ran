@@ -28,7 +28,7 @@ class SimulationMonitor:
     linestyles = ["-", "--", ":"]
     colors = ["blue", "black", "red"]
 
-    def __init__(self, cases, esno_db_range):
+    def __init__(self, cases, esno_db_range, config=None):
         """Initialize the SimulationMonitor.
 
         Initialize the figure and the results table.
@@ -36,6 +36,9 @@ class SimulationMonitor:
         self.cases = cases
         self.esno_db_range = esno_db_range
         self.current_esno_db_range = []
+        # configuration dictionary provided by caller (simulation parameters, algorithm flags, etc.)
+        # Expect simple serializable types (numbers, strings, lists)
+        self.config = config or {}
 
         self.start_time = None
         self.esno_db = None
@@ -113,3 +116,24 @@ class SimulationMonitor:
         plt.grid()
         plt.legend()
         plt.show()
+
+    def save(self, out_dir='results', base_name='sim_results', fmt='mat'):
+        """Save simulation results and metadata to disk using the shared utility.
+
+        Args:
+            out_dir: directory for output
+            base_name: file base name without extension
+            fmt: 'mat' or 'npz' (mat preferred)
+        Returns path to saved file or raises on failure
+        """
+        try:
+            # import the shared save utility
+            from pyaerial.notebooks import save_results_mat
+        except Exception:
+            try:
+                import save_results_mat as save_results_mat
+            except Exception:
+                raise RuntimeError('save_results_mat utility not available')
+
+        # call utility with stored config
+        return save_results_mat.save_results_mat(out_dir, base_name, self, config=self.config, fmt=fmt)
