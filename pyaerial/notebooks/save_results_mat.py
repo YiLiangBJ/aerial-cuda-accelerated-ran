@@ -94,40 +94,92 @@ def save_results_mat(out_dir, base_name, monitor, config=None, fmt='mat'):
     except Exception:
         meta['config'] = str(config)
 
+    # sanitize entire metadata to ensure no numpy/cupy objects remain
+    try:
+        meta = _sanitize(meta)
+    except Exception:
+        # leave meta as-is if sanitization fails
+        pass
+
+    # Replace None values in metadata with empty strings (MAT files don't accept None)
+    def _replace_none(obj):
+        if isinstance(obj, dict):
+            return {k: _replace_none(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_replace_none(v) for v in obj]
+        if obj is None:
+            return ''
+        return obj
+
+    try:
+        meta = _replace_none(meta)
+    except Exception:
+        pass
+
     ts = time.strftime('%Y%m%dT%H%M%S')
-    if fmt == 'mat':
-        try:
-            from scipy.io import savemat
-        except Exception as e:
-            raise RuntimeError('scipy required to save mat files') from e
-        out_path = os.path.join(out_dir, f"{base_name}_{ts}.mat")
-        # Ensure bler arrays are plain numpy arrays
-        mat_dict = {
-            'esno_db_range': np.asarray(esno),
-            'metadata': meta
-        }
-        # add bler arrays as separate fields (force numpy arrays)
-        for k, v in bler.items():
+    # Only save MAT files. Build a MATLAB-friendly structure explicitly.
+    try:
+        from scipy.io import savemat
+    except Exception as e:
+        raise RuntimeError('scipy required to save mat files') from e
+
+    out_path = os.path.join(out_dir, f"{base_name}_{ts}.mat")
+
+    # Ensure we have pure Python/numpy types in metadata
+    def _to_matlab_struct(obj):
+        # Convert dict -> dict, list/tuple -> list, numpy/cupy -> Python lists/values
+        if isinstance(obj, dict):
+            return {str(k): _to_matlab_struct(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_to_matlab_struct(v) for v in obj]
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if _cp is not None:
             try:
-                mat_dict['bler_' + k] = np.asarray(v)
+                if isinstance(obj, _cp.ndarray):
+                    return _cp.asnumpy(obj).tolist()
             except Exception:
-                mat_dict['bler_' + k] = np.asarray(list(v))
-
-        # Debug: print what will be saved (keys and shapes)
+                pass
+        if isinstance(obj, (np.generic,)):
+            try:
+                return obj.item()
+            except Exception:
+                return float(obj)
+        if obj is None:
+            return ''
+        # basic types
+        if isinstance(obj, (str, int, float, bool)):
+            return obj
+        # bytes
+        if isinstance(obj, bytes):
+            try:
+                return obj.decode('utf-8')
+            except Exception:
+                return str(obj)
+        # fallback to string representation
         try:
-            keys_info = {k: (None if not hasattr(v, 'shape') else tuple(v.shape)) for k, v in mat_dict.items()}
+            return str(obj)
         except Exception:
-            keys_info = {k: type(v).__name__ for k, v in mat_dict.items()}
-        print(f"Saving MAT file with keys: {list(mat_dict.keys())}")
-        print(f"Keys info: {keys_info}")
+            return ''
 
-        savemat(out_path, mat_dict)
-        return out_path
-    else:
-        out_path = os.path.join(out_dir, f"{base_name}_{ts}.npz")
-        # Ensure arrays are numpy arrays
-        np.savez(out_path, esno_db_range=np.asarray(esno), **{('bler_' + k): np.asarray(v) for k, v in bler.items()})
-        # save metadata as json sidecar using safe fallback for unknown types
-        with open(out_path + '.meta.json', 'w') as f:
-            json.dump(meta, f, indent=2, default=str)
-        return out_path
+    # Build mat_dict with explicit conversion
+    mat_dict = {
+        'esno_db_range': np.asarray(esno)
+    }
+    # Add metadata as a MATLAB struct-like dict
+    mat_dict['metadata'] = _to_matlab_struct(meta)
+
+    for k, v in bler.items():
+        mat_dict['bler_' + k] = np.asarray(v)
+
+    # Print keys and shapes for debug visibility
+    try:
+        keys_info = {k: (None if not hasattr(v, 'shape') else tuple(v.shape)) for k, v in mat_dict.items()}
+    except Exception:
+        keys_info = {k: type(v).__name__ for k, v in mat_dict.items()}
+    print(f"Saving MAT file with keys: {list(mat_dict.keys())}")
+    print(f"Keys info: {keys_info}")
+
+    # Save and bubble up any errors (no fallback)
+    savemat(out_path, mat_dict)
+    return out_path

@@ -490,13 +490,6 @@ for esno_db in esno_db_range:
     monitor.finish_step(num_tbs=slot_idx + 1, num_tb_errors=num_tb_errors)  
 monitor.finish()
 
-# Save results using monitor.save (raises on fatal errors)
-try:
-    out = monitor.save('results', 'neural_receiver_results', fmt='mat')
-    print('Saved results to', out)
-except Exception as e:
-    try:
-        out = monitor.save('results', 'neural_receiver_results', fmt='npz')
-        print('Saved results to', out)
-    except Exception as e2:
-        print('Could not save results:', e2)
+# Save results using monitor.save (raise on fatal errors; do not fallback to npz/json)
+out = monitor.save('results', 'neural_receiver_results', fmt='mat')
+print('Saved results to', out)
