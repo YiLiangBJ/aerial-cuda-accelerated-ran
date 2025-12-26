@@ -398,13 +398,6 @@ print("Average execution times:")
 for name, exec_time in exec_times.items():
     print(f"{name}: {exec_time * 1000: .2f} ms.")
 
-# Save results using monitor.save
-try:
-    out = monitor.save('results', 'pusch_simulation_results', fmt='mat')
-    print('Saved results to', out)
-except Exception as e:
-    try:
-        out = monitor.save('results', 'pusch_simulation_results', fmt='npz')
-        print('Saved results to', out)
-    except Exception as e2:
-        print('Could not save results:', e2)
+# Save results using monitor.save (raise on fatal errors; do not fallback to npz/json)
+out = monitor.save('results', 'neural_receiver_results', fmt='mat')
+print('Saved results to', out)
