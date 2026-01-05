@@ -79,7 +79,7 @@ docker run --privileged \
             -v /var/log/aerial:/var/log/aerial \
             -e host_cuBB_SDK=$host_cuBB_SDK \
             --userns=host --ipc=host \
-            $PYAERIAL_IMAGE tail -f /dev/null
+            $PYAERIAL_IMAGE fixuid -q /bin/bash -c "export HOME=/home/aerial && tail -f /dev/null"
 
 if [ $? -eq 0 ]; then
     echo ""
