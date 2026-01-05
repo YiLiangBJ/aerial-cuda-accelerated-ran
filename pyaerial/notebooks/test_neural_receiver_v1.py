@@ -97,7 +97,7 @@ carrier_frequency = 3.5e9  # Carrier frequency in Hz.
 delay_spread = 100e-9      # Nominal delay spread in [s]. Please see the CDL documentation
                            # about how to choose this value.
 link_direction = "uplink"
-channel_model = "Rayleigh" # Channel model: Suitable values:
+channel_model = "TDLA30-10" # Channel model: Suitable values:
                            # "Rayleigh" - Rayleigh block fading channel model (sionna.channel.RayleighBlockFading)
                            # "TDLA30-10", "TDLB100-400", "TDLC300-100" - convenience names mapped to Sionna TR 38.901 TDL
                            #     (internally mapped with Doppler->speed conversion)
