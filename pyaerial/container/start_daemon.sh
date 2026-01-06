@@ -1,5 +1,6 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
+# All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,36 +15,66 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# USAGE: PYAERIAL_IMAGE=<image> $cuBB_SDK/pyaerial/container/start_daemon.sh
+# USAGE:
+#   PYAERIAL_IMAGE=<image> $cuBB_SDK/pyaerial/container/start_daemon.sh [cmd...]
 #
-# Start PyAerial container in daemon mode for VS Code Dev Containers attach.
-# The container will run in the background and restart automatically unless manually stopped.
+# Start PyAerial container in daemon mode (background) for VS Code attach.
+# The container restarts automatically unless manually stopped.
+#
+# Compatibility note vs run.sh:
+# - run.sh starts an interactive container (or runs a command and exits).
+# - start_daemon.sh keeps a single container running; if [cmd...] is provided,
+#   it runs inside the daemon container via `docker exec`.
+
+set -euo pipefail
 
 USER_ID=$(id -u)
 GROUP_ID=$(id -g)
+USER_NAME=${USER:-$(id -un)}
 
-# Identify SCRIPT_DIR
-SCRIPT=$(readlink -f $0)
-SCRIPT_DIR=$(dirname $SCRIPT)
-host_cuBB_SDK=$(builtin cd $SCRIPT_DIR/../..;pwd)
+SCRIPT=$(readlink -f "$0")
+SCRIPT_DIR=$(dirname "$SCRIPT")
+host_cuBB_SDK=$(builtin cd "$SCRIPT_DIR/../.."; pwd)
 
-echo "=== PyAerial Daemon Launcher ==="
-echo "Starting from: $SCRIPT"
-source $host_cuBB_SDK/cuPHY-CP/container/setup.sh
+echo "$SCRIPT starting..."
+source "$host_cuBB_SDK/cuPHY-CP/container/setup.sh"
 
-AERIAL_PLATFORM=${AERIAL_PLATFORM:-amd64}
-TARGETARCH=$(basename $AERIAL_PLATFORM)
-
-if [[ -z $PYAERIAL_IMAGE ]]; then
-   PYAERIAL_IMAGE=pyaerial:${USER}-${AERIAL_VERSION_TAG}-${TARGETARCH}
+EXEC_CMD=""
+if [ $# -gt 0 ]; then
+    EXEC_CMD="$*"
 fi
 
-CONTAINER_NAME=pyaerial_$USER
+AERIAL_PLATFORM=${AERIAL_PLATFORM:-amd64}
+TARGETARCH=$(basename "$AERIAL_PLATFORM")
 
-# Check if container already exists
+if [[ -z ${PYAERIAL_IMAGE:-} ]]; then
+    PYAERIAL_IMAGE="pyaerial:${USER_NAME}-${AERIAL_VERSION_TAG}-${TARGETARCH}"
+fi
+
+CONTAINER_NAME="pyaerial_${USER_NAME}"
+
+# Match run.sh behavior:
+# - check host ~/.bashrc for the marker
+# - if missing, append PS1 export into container ~/.bashrc before daemon cmd
+DAEMON_CMD="tail -f /dev/null"
+if [[ ! -f "$HOME/.bashrc" ]] || ! grep -qi 'export PS1="\[host:' "$HOME/.bashrc"; then
+    DAEMON_CMD="echo 'export PS1=\"[host: $host_cuBB_SDK] \$PS1\"' >> ~/.bashrc && $DAEMON_CMD"
+fi
+
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        echo "✓ Container '$CONTAINER_NAME' is already running"
+        echo "Container '$CONTAINER_NAME' is already running"
+
+        if [ -n "$EXEC_CMD" ]; then
+            echo "Running command inside container: $EXEC_CMD"
+            if [ -t 1 ]; then
+                docker exec -it "$CONTAINER_NAME" /bin/bash -c "$EXEC_CMD"
+            else
+                docker exec -i "$CONTAINER_NAME" /bin/bash -c "$EXEC_CMD"
+            fi
+            exit $?
+        fi
+
         echo ""
         echo "To attach in VS Code:"
         echo "  1. Open Command Palette (Ctrl+Shift+P / Cmd+Shift+P)"
@@ -54,7 +85,7 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         exit 0
     else
         echo "Container exists but stopped. Removing..."
-        docker rm $CONTAINER_NAME
+        docker rm "$CONTAINER_NAME"
     fi
 fi
 
@@ -62,36 +93,41 @@ echo "Starting container '$CONTAINER_NAME' in background..."
 echo "Image: $PYAERIAL_IMAGE"
 
 docker run --privileged \
-            -d \
-            --restart unless-stopped \
-            $AERIAL_EXTRA_FLAGS \
-            --gpus all \
-            --name $CONTAINER_NAME \
-            --add-host $CONTAINER_NAME:127.0.0.1 \
-            --network host --shm-size=4096m \
-            --device=/dev/gdrdrv:/dev/gdrdrv \
-            -u $USER_ID:$GROUP_ID \
-            -w /opt/nvidia/cuBB \
-            -v $host_cuBB_SDK:/opt/nvidia/cuBB \
-            -v $host_cuBB_SDK:/opt/nvidia/aerial_sdk \
-            -v /dev/hugepages:/dev/hugepages \
-            -v /lib/modules:/lib/modules \
-            -v /var/log/aerial:/var/log/aerial \
-            -e host_cuBB_SDK=$host_cuBB_SDK \
-            --userns=host --ipc=host \
-            $PYAERIAL_IMAGE fixuid -q /bin/bash -c "export HOME=/home/aerial && tail -f /dev/null"
+    -dt \
+    --restart unless-stopped \
+    ${AERIAL_EXTRA_FLAGS:-} \
+    --gpus all \
+    --name "$CONTAINER_NAME" \
+    --add-host "$CONTAINER_NAME":127.0.0.1 \
+    --network host --shm-size=4096m \
+    --device=/dev/gdrdrv:/dev/gdrdrv \
+    -u "$USER_ID:$GROUP_ID" \
+    -w /opt/nvidia/cuBB \
+    -v "$host_cuBB_SDK":/opt/nvidia/cuBB \
+    -v "$host_cuBB_SDK":/opt/nvidia/aerial_sdk \
+    -v /dev/hugepages:/dev/hugepages \
+    -v /lib/modules:/lib/modules \
+    -v /var/log/aerial:/var/log/aerial \
+    -e host_cuBB_SDK="$host_cuBB_SDK" \
+    --userns=host --ipc=host \
+    "$PYAERIAL_IMAGE" fixuid -q /bin/bash -c "$DAEMON_CMD"
 
-if [ $? -eq 0 ]; then
+echo ""
+echo "Container started successfully."
+echo "Next: attach via VS Code Dev Containers to '$CONTAINER_NAME'."
+
+echo ""
+echo "Tips:"
+echo "  - Logs: docker logs -f $CONTAINER_NAME"
+echo "  - Stop: $SCRIPT_DIR/stop_daemon.sh"
+
+if [ -n "$EXEC_CMD" ]; then
     echo ""
-    echo "✓ Container started successfully!"
-    echo ""
-    echo "Next steps:"
-    echo "  • VS Code attach: Remote Explorer → Dev Containers → $CONTAINER_NAME"
-    echo "  • View logs: docker logs -f $CONTAINER_NAME"
-    echo "  • Stop container: $SCRIPT_DIR/stop_daemon.sh"
-    echo ""
-    echo "The container will automatically restart unless manually stopped."
-else
-    echo "✗ Failed to start container"
-    exit 1
+    echo "Running command inside container: $EXEC_CMD"
+    if [ -t 1 ]; then
+        docker exec -it "$CONTAINER_NAME" /bin/bash -c "$EXEC_CMD"
+    else
+        docker exec -i "$CONTAINER_NAME" /bin/bash -c "$EXEC_CMD"
+    fi
+    exit $?
 fi

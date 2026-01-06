@@ -1,5 +1,6 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
+# All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,37 +16,27 @@
 # limitations under the License.
 
 # USAGE: $cuBB_SDK/pyaerial/container/stop_daemon.sh
-#
 # Stop and remove the PyAerial daemon container.
 
-USER_ID=$(id -u)
-CONTAINER_NAME=pyaerial_$USER
+set -euo pipefail
+
+USER_NAME=${USER:-$(id -un)}
+CONTAINER_NAME="pyaerial_${USER_NAME}"
 
 echo "=== PyAerial Daemon Stopper ==="
 
 if ! docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    echo "✓ Container '$CONTAINER_NAME' does not exist (already removed)"
+    echo "Container '$CONTAINER_NAME' does not exist (already removed)"
     exit 0
 fi
 
 if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     echo "Stopping container '$CONTAINER_NAME'..."
-    docker stop $CONTAINER_NAME
-    if [ $? -ne 0 ]; then
-        echo "✗ Failed to stop container"
-        exit 1
-    fi
+    docker stop "$CONTAINER_NAME"
 fi
 
 echo "Removing container '$CONTAINER_NAME'..."
-docker rm $CONTAINER_NAME
+docker rm "$CONTAINER_NAME"
 
-if [ $? -eq 0 ]; then
-    echo ""
-    echo "✓ Container stopped and removed successfully"
-    echo ""
-    echo "To restart: $(dirname $0)/start_daemon.sh"
-else
-    echo "✗ Failed to remove container"
-    exit 1
-fi
+echo ""
+echo "Container stopped and removed successfully."
