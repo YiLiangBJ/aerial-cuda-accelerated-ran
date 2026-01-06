@@ -37,7 +37,11 @@ SCRIPT_DIR=$(dirname "$SCRIPT")
 host_cuBB_SDK=$(builtin cd "$SCRIPT_DIR/../.."; pwd)
 
 echo "$SCRIPT starting..."
+# NOTE: cuPHY-CP/container/setup.sh may reference variables before defining them.
+# run.sh works because it doesn't enable `nounset`; temporarily disable it here.
+set +u
 source "$host_cuBB_SDK/cuPHY-CP/container/setup.sh"
+set -u
 
 EXEC_CMD=""
 if [ $# -gt 0 ]; then
