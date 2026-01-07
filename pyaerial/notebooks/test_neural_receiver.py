@@ -102,7 +102,8 @@ channel_model = "Rayleigh" # Channel model: Suitable values:
                            #          as per TR 38.901.
 speed = 0.8333             # UE speed [m/s]. The direction of travel will chosen randomly within the x-y plane.
 
-MODEL_DIR = "../models"
+# MODEL_DIR = "../models"
+MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
 nrx_onnx_file = f"{MODEL_DIR}/neural_rx.onnx"
 nrx_trt_file = f"{MODEL_DIR}/neural_rx.trt"
 command = f"trtexec " + \

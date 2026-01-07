@@ -50,6 +50,14 @@ esno_db_range = np.arange(-4.0, -2.8, 0.2)
 num_slots = 10000
 min_num_tb_errors = 250
 
+# 38.104 related
+num_tx_ant = 1             # UE antennas
+num_rx_ant = 4             # gNB antennas
+layers = 1                 # Number of layers
+mcs_index = 2              # MCS index as per TS 38.214 table.
+mcs_table = 0              # MCS table index
+dmrs_ports = 1             # Used DMRS port.
+
 # Numerology and frame structure. See TS 38.211.
 num_ofdm_symbols = 14
 fft_size = 4096
@@ -59,8 +67,8 @@ num_guard_subcarriers = (410, 410)
 num_slots_per_frame = 20
 
 # System/gNB configuration
-num_tx_ant = 1             # UE antennas
-num_rx_ant = 4             # gNB antennas
+# num_tx_ant = 1             # UE antennas
+# num_rx_ant = 4             # gNB antennas
 cell_id = 41               # Physical cell ID
 enable_pusch_tdi = 1       # Enable time interpolation for equalizer coefficients
 eq_coeff_algo = 1          # Equalizer algorithm
@@ -69,16 +77,17 @@ eq_coeff_algo = 1          # Equalizer algorithm
 rnti = 1234                # UE RNTI
 scid = 0                   # DMRS scrambling ID
 data_scid = 0              # Data scrambling ID
-layers = 1                 # Number of layers
-mcs_index = 7              # MCS index as per TS 38.214 table.
-mcs_table = 0              # MCS table index
-dmrs_ports = 1             # Used DMRS port.
+# layers = 2                 # Number of layers
+# mcs_index = 2              # MCS index as per TS 38.214 table.
+# mcs_table = 0              # MCS table index
+# dmrs_ports = [0, 1]             # Used DMRS port.
 start_prb = 0              # Start PRB index.
 num_prbs = 273             # Number of allocated PRBs.
 start_sym = 0              # Start symbol index.
 num_symbols = 12           # Number of symbols.
 dmrs_scrm_id = 41          # DMRS scrambling ID
 dmrs_syms = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0]  # Indicates which symbols are used for DMRS.
+# dmrs_syms = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]  # Indicates which symbols are used for DMRS.
 dmrs_max_len = 1
 dmrs_add_ln_pos = 2
 num_dmrs_cdm_grps_no_data = 2
@@ -154,7 +163,8 @@ def _parse_tdl_channel_model(name: str):
     delay_spread_s = delay_ns * 1e-9
     return tdl_model, delay_spread_s, doppler_hz
 
-MODEL_DIR = "../models"
+# MODEL_DIR = "../models"
+MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
 nrx_onnx_file = f"{MODEL_DIR}/neural_rx.onnx"
 nrx_trt_file = f"{MODEL_DIR}/neural_rx.trt"
 command = f"trtexec " + \
