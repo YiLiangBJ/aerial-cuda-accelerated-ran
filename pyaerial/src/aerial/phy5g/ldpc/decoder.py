@@ -35,7 +35,7 @@ class LdpcDecoder(Generic[Array]):
     """
 
     def __init__(self,
-                 num_iterations: int = 10,
+                 num_iterations: int = 12,
                  throughput_mode: bool = False,
                  cuda_stream: int = None) -> None:
         """Initialize LdpcDecoder.

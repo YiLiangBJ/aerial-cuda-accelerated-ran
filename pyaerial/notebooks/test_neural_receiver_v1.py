@@ -259,8 +259,12 @@ class NeuralRx:
         # - DMRS OFDM symbol locations (indices)
         # - DMRS subcarrier positions within a PRB (indices)        
         # Note that the shapes are given without batch size.
+        MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
+        # nrx_onnx_file = f"{MODEL_DIR}/neural_rx.onnx"
+        nrx_trt_file = f"{MODEL_DIR}/neural_rx.trt"
         self.trt_engine = TrtEngine(
-            trt_model_file="../models/neural_rx.trt",
+            # trt_model_file="../models/neural_rx.trt",
+            trt_model_file=nrx_trt_file,
             max_batch_size=1,
             input_tensors=[TrtTensorPrms('rx_slot_real', (3276, 12, 4), np.float32),
                            TrtTensorPrms('rx_slot_imag', (3276, 12, 4), np.float32),
