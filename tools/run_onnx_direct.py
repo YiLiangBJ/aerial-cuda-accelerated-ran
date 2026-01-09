@@ -1,43 +1,33 @@
 #!/usr/bin/env python3
 """Run an ONNX model directly (no TensorRT) with synthetic inputs.
 
-/opt/nvidia/ + 冒烟测试(Shape Smoke Test)”，帮助你理解： 
-- ONNX 模型有哪些输入/输出张量
-- 每个张量的 dtype / shape 是什么
-- onnxruntime 是如何执行一次推理的
-source /opt/venv/bin/main() 流程）：
-1) 选择 onnxruntime provider（CPU / CUDA）
-2) 加载 ONNX：ort.InferenceSession(model_path, providers=...)
-3) 遍历 session.get_inputs()，打印每个输入张量的 name/type/shape
-4) 根据输入签名生成“'numpy 随机数)，保证 dtype/shape 匹配PY'
-5) 调用 sess.run(output_names, feeds) 执行一次推理
-6) 打印输出张量的 dtype/shape
+脚本定位：快速做“形状冒烟测试 (Shape Smoke Test)”——验证模型的输入/输出签名，
+确保 onnxruntime 能接受给定的维度与 dtype。
 
-source /opt/venv/bin/activate
-- 本脚本生成的是随机数据，不是有物理意义的无线信号。
-- 目的仅是验证“ + 输入维度是否被接受”。
+主要步骤：
+1) 选择 onnxruntime provider（CPU / CUDA，按可用性优先）。
+2) 加载 ONNX：`ort.InferenceSession(model_path, providers=...)`。
+3) 枚举 `session.get_inputs()`，打印每个输入的 name/type/shape。
+4) 根据输入签名生成匹配 dtype/shape 的随机 numpy 张量。
+5) 运行 `sess.run(output_names, feeds)` 做一次推理。
+6) 打印输出张量的 dtype/shape。
 
- pyaerial/models/neural_rx.onnx：
-- rx_slot_real / rx_slot_imag: 形状类似 [B, 3276, 12, 4]
-  - B: batch（默认 1）
-  - 3276: 某种“flattened RE”长度（来自 notebook 的配置/推理接口约定）
-  - 12: OFDM symbols 数（该 ONNX 里通常是静态写死 12）
-  - 4: 特征/天线等维度（具体语义依模型定义）
-- h_hat_real / h_hat_imag: 形状类似 [B, 4914, 1, 4]
+使用提示：
+- 本脚本生成的是随机数据，没有无线物理含义，仅验证形状和推理通路。
+- 默认模型 pyaerial/models/neural_rx.onnx：
+    - rx_slot_real / rx_slot_imag: 约 [B, 3276, 12, 4]
+        * B: batch（默认 1）
+        * 3276: flatten 后的 RE 长度（按 notebook / 推理接口约定）
+        * 12: OFDM symbols 数，通常在 ONNX 中是静态常数 12
+        * 4: 特征/天线等维度（取决于模型定义）
+    - h_hat_real / h_hat_imag: 约 [B, 4914, 1, 4]
+- 如果 --symbols 改成 14 而模型把 symbols 轴写死为 12，onnxruntime 会报
+    “Got 14 Expected 12”，需要重新导出/训练为动态维才能支持 14。
 
- --symbols 改成 14：
-- 若 ONNX 的 symbols 维是静态 12，onnxruntime 会直接报：Got 14 Expected 12。
-- 这意味着“就这个 ONNX 文件本身”不支持 14 symbols；要支持必须重新导出/训练成动态维。
-
-source /opt/venv/bin/activate
-  直接运行（使用默认模型与默认 symbols=12）：
+运行示例（假设已 `source /opt/venv/bin/activate`）：
     /opt/venv/bin/python -u tools/run_onnx_direct.py
-
-  指定 symbols：
     /opt/venv/bin/python -u tools/run_onnx_direct.py --symbols 12
     /opt/venv/bin/python -u tools/run_onnx_direct.py --symbols 14
-
-  指定模型：
     /opt/venv/bin/python -u tools/run_onnx_direct.py --model pyaerial/models/neural_rx.onnx
 """
 
@@ -60,13 +50,12 @@ except Exception as e:  # pragma: no cover
 
 
 def _pick_providers(prefer_cuda: bool) -> List[str]:
-    """选择 onnxruntime 执行后端(provider)。
+    """选择 onnxruntime provider 顺序。
 
-    - CPUExecutionProvider：一定可用；适合做 shape/正确性检查。
-    - CUDAExecutionProvider：如果装了 且环境可用，就能 onnxruntime-gpu GPU 跑。
+    - CPUExecutionProvider：一定可用；适合形状/正确性检查。
+    - CUDAExecutionProvider：存在且环境可用时优先，失败则回退 CPU。
 
-    返回值是一个列表，onnxruntime 会按顺序尝试。
-    """
+    返回顺序列表，onnxruntime 会依次尝试。"""
 
     available = ort.get_available_providers()
     if prefer_cuda and "CUDAExecutionProvider" in available:
@@ -75,15 +64,9 @@ def _pick_providers(prefer_cuda: bool) -> List[str]:
 
 
 def _ort_type_to_numpy_dtype(ort_type: str) -> np.dtype:
-    """把 onnxruntime 的  numpy dtype。
+    """把 onnxruntime 的 tensor 类型字符串映射到 numpy dtype。
 
-    onnxruntime 的输入/输出类型通常长这样：
-      - tensor(float)
-      - tensor(int32)
-      - tensor(float16)
-
-    我们需要它来创建 dtype 匹配的 numpy 输入。
-    """
+    典型值：tensor(float), tensor(int32), tensor(float16)；用于生成匹配的输入。"""
 
     m = re.match(r"^tensor\((.+)\)$", ort_type)
     if not m:
@@ -119,28 +102,23 @@ def _resolve_shape(
     rx_slot_len: int,
     h_hat_len: int,
 ) -> Tuple[int, ...]:
-    """把 ORT 返回的 shape（可能含动态维）解析成具体整数 shape。
+    """把 ORT 返回的 shape（含静态/动态维）具体化成整数 tuple 以生成输入张量。
 
-source /opt/venv/bin/activate
-    - int：静态维度
-    - str：动态维度名称（例如 'unk__644'）
-    - None：动态维度
+    onnxruntime 的维度标记：
+    - int: 静态维度（定长，直接保留）
+    - str: 动态维度名（unk__xxx），需要映射为具体数
+    - None: 动态维度占位，同样需要映射
 
-    为了分配 numpy 数组，我们必须把它变成全是 int 的 tuple。
+    针对 neural_rx.onnx 的策略：
+    - 若输入名包含 rx_slot，且有静态值 12，视作 symbols 轴，用传入的 symbols 替换。
+    - 动态维映射：
+      * 轴 0 -> batch
+      * rx_slot_* 的轴 1 -> rx_slot_len（默认 3276）
+      * h_hat_* 的轴 1   -> h_hat_len（默认 4914）
+      * 其他动态轴 -> 1（兜底）
 
-    本函数的策略（偏向 neural_rx.onnx）：
-#    - 保留
-
-    - 如果输入名含 rx_slot 且某个维度是静态 12，则认为它是 symbols 维，替换为传入的 symbols
-    - 其余动态维度：
-      * dim0 -> batch
-      * rx_slot_* dim1 -> rx_slot_len（默认 3276）
-      * h_hat_* dim1   -> h_hat_len（默认 4914）
-      * 其他动态维 -> 1
-
-    注意：就算这里把 symbols 14，也不代表 替换成
-    如果 ONNX 把 symbols 写死为 12，onnxruntime 仍会报 Got 14 Expected 12。
-    """
+    注意：此处替换 symbols 仅用于生成输入；如果模型本身把该轴写死为 12，
+    传 14 仍会在推理时报 “Got 14 Expected 12”。"""
 
     # 先把静态维度保留，动态维度 # None 标记。
     dims: List[int | None] = []
@@ -183,12 +161,10 @@ source /opt/venv/bin/activate
 def _make_input_array(name: str, shape: Tuple[int, ...], ort_type: str, seed: int) -> np.ndarray:
     """按 dtype/shape 生成一个假的输入张量。
 
-#source /opt/venv/bin/activate
-
+    - 浮点：标准正态分布
     - 整数/布尔：小范围随机值
 
-    这些值本身不重要，只要 dtype/shape 能通过 ORT 校验并让图跑起来。
-    """
+    只关注 dtype/shape 正确性，使推理能跑通。"""
 
     dtype = _ort_type_to_numpy_dtype(ort_type)
     rng = np.random.default_rng(seed)
@@ -218,20 +194,20 @@ def main() -> int:
     # argparse 负责从命令行解析参数。
     ap = argparse.ArgumentParser(description="Run ONNX directly with synthetic inputs")
 
-    # 让 --model 不是必填，这样你在 VS Code 里直接 Run Python File 也能跑。
+    # --model 非必填：在 VS Code 里直接 Run Python File 也能跑默认模型。
     ap.add_argument(
         "--model",
         default="./pyaerial/models/neural_rx.onnx",
         help="Path to .onnx (default: ./pyaerial/models/neural_rx.onnx)",
     )
 
-    # 你想试的“符号数”维度。
+    # 待测试的符号数（通常对应 OFDM symbol 轴）。
     ap.add_argument("--symbols", type=int, default=12, help="Number of symbols to test")
 
     # batch 默认 1：只跑一条样本。
     ap.add_argument("--batch", type=int, default=1)
 
-    # 下面两个是 neural_rx.onnx 的约定长度（来自仓库 notebook/推理接口），换别的模型可能要改。
+    # 下两项是 neural_rx.onnx 的约定长度（来自仓库 notebook/推理接口），换别的模型可能要改。
     ap.add_argument(
         "--rx-slot-len",
         type=int,
@@ -245,10 +221,10 @@ def main() -> int:
         help="Length of h_hat_* axis (neural_rx default: 4914)",
     )
 
-    # 如果可用，优先用 CUDA provider；否则自动回退 CPU
+    # 如果可用，优先用 CUDA provider；否则自动回退 CPU。
     ap.add_argument("--cuda", action="store_true", help="Prefer CUDAExecutionProvider")
 
-    # 固定随
+    # 固定随机种子，便于复现输入。
     ap.add_argument("--seed", type=int, default=0)
 
     args = ap.parse_args()
@@ -257,22 +233,24 @@ def main() -> int:
     if not os.path.exists(model_path):
         raise SystemExit(f"Model not found: {model_path}")
 
+    # 选择推理后端顺序（CUDA 优先，CPU 兜底）。
     providers = _pick_providers(args.cuda)
 
     print(f"Model: {model_path}")
     print(f"Providers: {providers}")
     print(f"Test symbols: {args.symbols}")
 
-    # 创 session：此时 onnxruntime 会加载模型、做图优化、准备执行。
+    # 创建 session：此时 onnxruntime 会加载模型、做图优化、准备执行。
     sess = ort.InferenceSession(model_path, providers=providers)
 
-    # 准备输入 feeds：dict[input_name] = numpy_array
+    # 准备输入 feeds：dict[input_name] = numpy_array。
     print("\nInputs:")
     feeds: Dict[str, np.ndarray] = {}
     for idx, inp in enumerate(sess.get_inputs()):
         # inp.name: 输入张量名（必须和 feeds 的 key 一致）
         # inp.type: 输入 dtype（如 tensor(float)）
         # inp.shape: 输入 shape（可能含动态维）
+        # resolved: 解析后的具体形状（将动态轴映射为具体整数）。
         resolved = _resolve_shape(
             inp.name,
             inp.shape,
