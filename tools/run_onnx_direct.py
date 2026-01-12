@@ -202,7 +202,7 @@ def main() -> int:
     )
 
     # 待测试的符号数（通常对应 OFDM symbol 轴）。
-    ap.add_argument("--symbols", type=int, default=12, help="Number of symbols to test")
+    ap.add_argument("--symbols", type=int, default=14, help="Number of symbols to test")
 
     # batch 默认 1：只跑一条样本。
     ap.add_argument("--batch", type=int, default=1)

@@ -2,6 +2,7 @@
 from collections import defaultdict
 import re
 import os
+from pathlib import Path
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = "3"  # Silence TensorFlow.
 os.environ["CUDA_MODULE_LOADING"] = "LAZY"
@@ -46,18 +47,50 @@ try:
 except Exception:
     pass
 
-esno_db_range = np.arange(-4.0, -2.8, 0.2)
+
 num_slots = 10000
 min_num_tb_errors = 250
 
-# 38.104 related
+# Run multiple scenarios back-to-back.
+# Each scenario has its own (mcs_index, channel_model, esno_db_range) and will be saved separately.
+SCENARIOS = [
+    {
+        "name": "mcs2_TDLB100-400",
+        "mcs_index": 2,
+        "channel_model": "TDLB100-400",
+        "esno_db_range": np.arange(-5.0, 15.0, 1.0),
+    },
+    {
+        "name": "mcs16_TDLC300-100",
+        "mcs_index": 16,
+        "channel_model": "TDLC300-100",
+        "esno_db_range": np.arange(5.0, 20.0, 1.0),
+    },
+    {
+        "name": "mcs20_TDLA30-10",
+        "mcs_index": 20,
+        "channel_model": "TDLA30-10",
+        "esno_db_range": np.arange(5.0, 20.0, 1.0),
+    },
+]
+
+# In terminal/batch runs, showing matplotlib windows can block. Set SHOW_PLOTS=0 to disable.
+SHOW_PLOTS = os.environ.get("SHOW_PLOTS", "1") != "0"
+
+
+# channel_model = "TDLA30-10" # Channel model: Suitable values:
+#                            # "Rayleigh" - Rayleigh block fading channel model (sionna.channel.RayleighBlockFading)
+#                            # "TDLA30-10", "TDLB100-400", "TDLC300-100" - convenience names mapped to Sionna TR 38.901 TDL
+#                            #     (internally mapped with Doppler->speed conversion)
+#                            # "TDL-A30" or "TDL-A30-10" (also accepts "TDLA30-10" style) - TR 38.901 TDL models
+#                            # "CDL-x", where x is one of ["A", "B", "C", "D", "E"] - for 3GPP CDL channel models
+#                            #          as per TR 38.901.
+
 num_tx_ant = 1             # UE antennas
 num_rx_ant = 4             # gNB antennas
 layers = 1                 # Number of layers
-mcs_index = 2              # MCS index as per TS 38.214 table.
 mcs_table = 0              # MCS table index
 dmrs_ports = 1             # Used DMRS port.
-
 # Numerology and frame structure. See TS 38.211.
 num_ofdm_symbols = 14
 fft_size = 4096
@@ -91,28 +124,66 @@ dmrs_syms = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0]  # Indicates which symbol
 dmrs_max_len = 1
 dmrs_add_ln_pos = 2
 num_dmrs_cdm_grps_no_data = 2
-mod_order, code_rate = get_mcs(mcs_index, mcs_table+1)  # Different indexing for MCS table.
-tb_size = get_tb_size(  # TB size in bits
-    mod_order=mod_order,
-    code_rate=code_rate,
-    dmrs_syms=dmrs_syms,
-    num_prbs=num_prbs,
-    start_sym=start_sym,
-    num_symbols=num_symbols,
-    num_layers=layers)
+def _slugify(s: str) -> str:
+    s = s.strip()
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"[^A-Za-z0-9_.-]", "_", s)
+    s = re.sub(r"_+", "_", s)
+    return s
+
+
+def _build_pusch_configs(mcs_index: int):
+    """Build per-scenario PUSCH configs (depends on MCS/tb_size)."""
+    mod_order, code_rate = get_mcs(mcs_index, mcs_table + 1)  # Different indexing for MCS table.
+    tb_size = get_tb_size(  # TB size in bits
+        mod_order=mod_order,
+        code_rate=code_rate,
+        dmrs_syms=dmrs_syms,
+        num_prbs=num_prbs,
+        start_sym=start_sym,
+        num_symbols=num_symbols,
+        num_layers=layers)
+
+    pusch_ue_config = PuschUeConfig(
+        scid=scid,
+        layers=layers,
+        dmrs_ports=dmrs_ports,
+        rnti=rnti,
+        data_scid=data_scid,
+        mcs_table=mcs_table,
+        mcs_index=mcs_index,
+        code_rate=int(code_rate * 10),
+        mod_order=mod_order,
+        tb_size=tb_size // 8
+    )
+
+    pusch_configs = [PuschConfig(
+        ue_configs=[pusch_ue_config],
+        num_dmrs_cdm_grps_no_data=num_dmrs_cdm_grps_no_data,
+        dmrs_scrm_id=dmrs_scrm_id,
+        start_prb=start_prb,
+        num_prbs=num_prbs,
+        dmrs_syms=dmrs_syms,
+        dmrs_max_len=dmrs_max_len,
+        dmrs_add_ln_pos=dmrs_add_ln_pos,
+        start_sym=start_sym,
+        num_symbols=num_symbols
+    )]
+
+    return mod_order, code_rate, tb_size, pusch_configs
 
 # Channel parameters
 carrier_frequency = 3.5e9  # Carrier frequency in Hz.                    
 delay_spread = 100e-9      # Nominal delay spread in [s]. Please see the CDL documentation
                            # about how to choose this value.
 link_direction = "uplink"
-channel_model = "TDLA30-10" # Channel model: Suitable values:
-                           # "Rayleigh" - Rayleigh block fading channel model (sionna.channel.RayleighBlockFading)
-                           # "TDLA30-10", "TDLB100-400", "TDLC300-100" - convenience names mapped to Sionna TR 38.901 TDL
-                           #     (internally mapped with Doppler->speed conversion)
-                           # "TDL-A30" or "TDL-A30-10" (also accepts "TDLA30-10" style) - TR 38.901 TDL models
-                           # "CDL-x", where x is one of ["A", "B", "C", "D", "E"] - for 3GPP CDL channel models
-                           #          as per TR 38.901.
+# channel_model = "TDLA30-10" # Channel model: Suitable values:
+#                            # "Rayleigh" - Rayleigh block fading channel model (sionna.channel.RayleighBlockFading)
+#                            # "TDLA30-10", "TDLB100-400", "TDLC300-100" - convenience names mapped to Sionna TR 38.901 TDL
+#                            #     (internally mapped with Doppler->speed conversion)
+#                            # "TDL-A30" or "TDL-A30-10" (also accepts "TDLA30-10" style) - TR 38.901 TDL models
+#                            # "CDL-x", where x is one of ["A", "B", "C", "D", "E"] - for 3GPP CDL channel models
+#                            #          as per TR 38.901.
 speed = 0.8333             # UE speed [m/s]. The direction of travel will chosen randomly within the x-y plane.
 
 
@@ -163,23 +234,37 @@ def _parse_tdl_channel_model(name: str):
     delay_spread_s = delay_ns * 1e-9
     return tdl_model, delay_spread_s, doppler_hz
 
-# MODEL_DIR = "../models"
-MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
-nrx_onnx_file = f"{MODEL_DIR}/neural_rx.onnx"
-nrx_trt_file = f"{MODEL_DIR}/neural_rx.trt"
-command = f"trtexec " + \
-    f"--onnx={nrx_onnx_file} " + \
-    f"--saveEngine={nrx_trt_file} " + \
-    f"--skipInference " + \
-    f"--inputIOFormats=fp32:chw,fp32:chw,fp32:chw,fp32:chw,fp32:chw,int32:chw,int32:chw " + \
-    f"--outputIOFormats=fp32:chw,fp32:chw " + \
-    f"--shapes=rx_slot_real:1x3276x12x4,rx_slot_imag:1x3276x12x4,h_hat_real:1x4914x1x4,h_hat_imag:1x4914x1x4 " + \
-    f"> /dev/null"
-return_val = os.system(command)
-if return_val == 0:
+SCRIPT_DIR = Path(__file__).resolve().parent
+MODEL_DIR = (SCRIPT_DIR.parent / "models").resolve()
+
+def _ensure_trt_engine(model_dir: Path) -> Path:
+    """Create the TensorRT engine file once (if missing)."""
+    nrx_onnx_file = model_dir / "neural_rx.onnx"
+    nrx_trt_file = model_dir / "neural_rx.trt"
+
+    if nrx_trt_file.exists() and os.environ.get("FORCE_REBUILD_TRT", "0") != "1":
+        return nrx_trt_file
+
+    if not nrx_onnx_file.exists():
+        raise SystemExit(f"Missing ONNX model: {nrx_onnx_file}")
+
+    command = (
+        "trtexec "
+        f"--onnx={nrx_onnx_file} "
+        f"--saveEngine={nrx_trt_file} "
+        "--skipInference "
+        "--inputIOFormats=fp32:chw,fp32:chw,fp32:chw,fp32:chw,fp32:chw,int32:chw,int32:chw "
+        "--outputIOFormats=fp32:chw,fp32:chw "
+        "--shapes=rx_slot_real:1x3276x12x4,rx_slot_imag:1x3276x12x4,h_hat_real:1x4914x1x4,h_hat_imag:1x4914x1x4 "
+        "> /dev/null"
+    )
+    return_val = os.system(command)
+    if return_val != 0 or not nrx_trt_file.exists():
+        raise SystemExit("Failed to create the TRT engine file! (check trtexec and model paths)")
     print("TRT engine model created.")
-else:
-    raise SystemExit("Failed to create the TRT engine file!")
+    return nrx_trt_file
+
+NRX_TRT_FILE = _ensure_trt_engine(MODEL_DIR)
 
 pusch_tx = PdschTx(
     cell_id=cell_id,
@@ -198,33 +283,6 @@ pusch_rx = PuschRx(
     ldpc_kernel_launch=PuschLdpcKernelLaunch.PUSCH_RX_LDPC_STREAM_SEQUENTIAL
 )
 
-# PUSCH configuration object. Note that default values are used for some parameters
-# not given here.
-pusch_ue_config = PuschUeConfig(
-    scid=scid,
-    layers=layers,
-    dmrs_ports=dmrs_ports,
-    rnti=rnti,
-    data_scid=data_scid,
-    mcs_table=mcs_table,
-    mcs_index=mcs_index,
-    code_rate=int(code_rate * 10),
-    mod_order=mod_order,
-    tb_size=tb_size // 8
-)
-# Note that this is a list. One UE group only in this case.
-pusch_configs = [PuschConfig(
-    ue_configs=[pusch_ue_config],
-    num_dmrs_cdm_grps_no_data=num_dmrs_cdm_grps_no_data,
-    dmrs_scrm_id=dmrs_scrm_id,
-    start_prb=start_prb,
-    num_prbs=num_prbs,
-    dmrs_syms=dmrs_syms,
-    dmrs_max_len=dmrs_max_len,
-    dmrs_add_ln_pos=dmrs_add_ln_pos,
-    start_sym=start_sym,
-    num_symbols=num_symbols
-)]
 
 
 class NeuralRx:
@@ -259,9 +317,7 @@ class NeuralRx:
         # - DMRS OFDM symbol locations (indices)
         # - DMRS subcarrier positions within a PRB (indices)        
         # Note that the shapes are given without batch size.
-        MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
-        # nrx_onnx_file = f"{MODEL_DIR}/neural_rx.onnx"
-        nrx_trt_file = f"{MODEL_DIR}/neural_rx.trt"
+        nrx_trt_file = str(NRX_TRT_FILE)
         self.trt_engine = TrtEngine(
             # trt_model_file="../models/neural_rx.trt",
             trt_model_file=nrx_trt_file,
@@ -289,7 +345,7 @@ class NeuralRx:
         self,
         rx_slot,
         slot,
-        pusch_configs=pusch_configs
+        pusch_configs
     ):
         """Run the receiver."""
         # Channel estimation.
@@ -379,66 +435,67 @@ gnb_array = sionna.phy.channel.tr38901.AntennaArray(
     carrier_frequency=carrier_frequency
 )
 
-if channel_model == "Rayleigh":
-    ch_model = sionna.phy.channel.RayleighBlockFading(
-        num_rx=1,
-        num_rx_ant=num_rx_ant,
-        num_tx=1,
-        num_tx_ant=num_tx_ant
-    )
 
-elif channel_model.startswith("TDL"):
-    parsed = _parse_tdl_channel_model(channel_model)
-    if parsed is None:
-        raise ValueError(
-            f"Invalid TDL channel model '{channel_model}'. "
-            "Examples: 'TDLA30-10', 'TDLB100-400', 'TDLC300-100', 'TDL-A30', 'TDL-A30-10'."
+def _build_sionna_ofdm_channel(channel_model: str):
+    channel_model = re.sub(r"\s*(Low|Med|Medium|High)\s*$", "", channel_model, flags=re.IGNORECASE)
+
+    if channel_model == "Rayleigh":
+        ch_model = sionna.phy.channel.RayleighBlockFading(
+            num_rx=1,
+            num_rx_ant=num_rx_ant,
+            num_tx=1,
+            num_tx_ant=num_tx_ant
         )
 
-    tdl_model, delay_spread_s, doppler_hz = parsed
-    # If Doppler is specified (e.g., '-400'), convert to speed for Sionna.
-    tdl_speed = _doppler_hz_to_speed_mps(doppler_hz, carrier_frequency) if doppler_hz is not None else speed
+    elif channel_model.startswith("TDL"):
+        parsed = _parse_tdl_channel_model(channel_model)
+        if parsed is None:
+            raise ValueError(
+                f"Invalid TDL channel model '{channel_model}'. "
+                "Examples: 'TDLA30-10', 'TDLB100-400', 'TDLC300-100', 'TDL-A30', 'TDL-A30-10'."
+            )
 
-    tdl = sionna.phy.channel.tr38901.TDL(
-        model=tdl_model,
-        delay_spread=delay_spread_s,
-        carrier_frequency=carrier_frequency,
-        min_speed=tdl_speed,
-        max_speed=tdl_speed,
-        num_tx_ant=num_tx_ant,
-        num_rx_ant=num_rx_ant,
+        tdl_model, delay_spread_s, doppler_hz = parsed
+        tdl_speed = _doppler_hz_to_speed_mps(doppler_hz, carrier_frequency) if doppler_hz is not None else speed
+
+        ch_model = sionna.phy.channel.tr38901.TDL(
+            model=tdl_model,
+            delay_spread=delay_spread_s,
+            carrier_frequency=carrier_frequency,
+            min_speed=tdl_speed,
+            max_speed=tdl_speed,
+            num_tx_ant=num_tx_ant,
+            num_rx_ant=num_rx_ant,
+        )
+
+    elif "CDL" in channel_model:
+        cdl_model = channel_model[-1]
+
+        ch_model = sionna.phy.channel.tr38901.CDL(
+            cdl_model,
+            delay_spread,
+            carrier_frequency,
+            ue_array,
+            gnb_array,
+            link_direction,
+            min_speed=speed
+        )
+    else:
+        raise ValueError(f"Invalid channel model {channel_model}!")
+
+    return sionna.phy.channel.OFDMChannel(
+        ch_model,
+        resource_grid,
+        add_awgn=True,
+        normalize_channel=True,
+        return_channel=False
     )
-    ch_model = tdl
-    
-elif "CDL" in channel_model:
-    cdl_model = channel_model[-1]
-    
-    # Configure a channel impulse reponse (CIR) generator for the CDL model.
-    ch_model = sionna.phy.channel.tr38901.CDL(
-        cdl_model,
-        delay_spread,
-        carrier_frequency,
-        ue_array,
-        gnb_array,
-        link_direction,
-        min_speed=speed
-    )
-else:
-    raise ValueError(f"Invalid channel model {channel_model}!")
 
-channel = sionna.phy.channel.OFDMChannel(
-    ch_model,
-    resource_grid,
-    add_awgn=True,
-    normalize_channel=True,
-    return_channel=False
-)
 
-def apply_channel(tx_tensor, No):
+def apply_channel(channel, tx_tensor, No):
     """Transmit the Tx tensor through the radio channel."""
-    # Add batch and num_tx dimensions that Sionna expects and reshape.
     tx_tensor = tf.transpose(tx_tensor, (2, 1, 0))
-    tx_tensor = tf.reshape(tx_tensor, (1, -1))[None, None]        
+    tx_tensor = tf.reshape(tx_tensor, (1, -1))[None, None]
     tx_tensor = resource_grid_mapper(tx_tensor)
     rx_tensor = channel(tx_tensor, No)
     rx_tensor = remove_guard_subcarriers(rx_tensor)
@@ -447,138 +504,155 @@ def apply_channel(tx_tensor, No):
     return rx_tensor
 
 cases = ["PUSCH Rx", "Neural Rx"]
-# Build grouped configuration dict to record simulation and algorithm settings
-cfg = {
-    'Sim': {
-        'use_cupy': True,
-        'esno_db_range': np.array(esno_db_range),
-        'num_slots': num_slots,
-        'min_num_tb_errors': min_num_tb_errors,
-        'random_seed': int(random_seed)
-    },
-    'Frame': {
-        'num_ofdm_symbols': num_ofdm_symbols,
-        'fft_size': fft_size,
-        'cyclic_prefix_length': cyclic_prefix_length,
-        'subcarrier_spacing': subcarrier_spacing,
-        'num_guard_subcarriers': list(num_guard_subcarriers),
-        'num_slots_per_frame': num_slots_per_frame
-    },
-    'System': {
-        'num_tx_ant': num_tx_ant,
-        'num_rx_ant': num_rx_ant,
-        'cell_id': cell_id,
-        'enable_pusch_tdi': enable_pusch_tdi,
-        'eq_coeff_algo': eq_coeff_algo
-    },
-    'PUSCH': {
-        'rnti': rnti,
-        'scid': scid,
-        'data_scid': data_scid,
-        'layers': layers,
-        'mcs_index': mcs_index,
-        'mcs_table': mcs_table,
-        'dmrs_ports': dmrs_ports,
-        'start_prb': start_prb,
-        'num_prbs': num_prbs,
-        'start_sym': start_sym,
-        'num_symbols': num_symbols,
-        'dmrs_scrm_id': dmrs_scrm_id,
-        'dmrs_syms': list(dmrs_syms),
-        'dmrs_max_len': dmrs_max_len,
-        'dmrs_add_ln_pos': dmrs_add_ln_pos,
-        'num_dmrs_cdm_grps_no_data': num_dmrs_cdm_grps_no_data,
-        'precoding_matrix': None,
-        'tb_size_bits': int(tb_size)
-    },
-    'Channel': {
-        'carrier_frequency': carrier_frequency,
-        'delay_spread': delay_spread,
-        'link_direction': link_direction,
-        'channel_model': re.sub(r"\s*(Low|Med|Medium|High)\s*$", "", channel_model, flags=re.IGNORECASE),
-        'speed': speed
-    },
-    'Algo': {
-        'use_trt': True
+
+
+def run_scenario(scn: dict) -> str:
+    scn_name = scn["name"]
+    mcs_index = int(scn["mcs_index"])
+    channel_model = str(scn["channel_model"])
+    esno_db_range = np.array(scn["esno_db_range"], dtype=float)
+
+    mod_order, code_rate, tb_size, pusch_configs = _build_pusch_configs(mcs_index)
+    channel = _build_sionna_ofdm_channel(channel_model)
+
+    cfg = {
+        "Scenario": {"name": scn_name},
+        "Sim": {
+            "use_cupy": True,
+            "esno_db_range": np.array(esno_db_range),
+            "num_slots": num_slots,
+            "min_num_tb_errors": min_num_tb_errors,
+            "random_seed": int(random_seed)
+        },
+        "Frame": {
+            "num_ofdm_symbols": num_ofdm_symbols,
+            "fft_size": fft_size,
+            "cyclic_prefix_length": cyclic_prefix_length,
+            "subcarrier_spacing": subcarrier_spacing,
+            "num_guard_subcarriers": list(num_guard_subcarriers),
+            "num_slots_per_frame": num_slots_per_frame
+        },
+        "System": {
+            "num_tx_ant": num_tx_ant,
+            "num_rx_ant": num_rx_ant,
+            "cell_id": cell_id,
+            "enable_pusch_tdi": enable_pusch_tdi,
+            "eq_coeff_algo": eq_coeff_algo
+        },
+        "PUSCH": {
+            "rnti": rnti,
+            "scid": scid,
+            "data_scid": data_scid,
+            "layers": layers,
+            "mcs_index": mcs_index,
+            "mcs_table": mcs_table,
+            "mod_order": int(mod_order),
+            "code_rate": float(code_rate),
+            "dmrs_ports": dmrs_ports,
+            "start_prb": start_prb,
+            "num_prbs": num_prbs,
+            "start_sym": start_sym,
+            "num_symbols": num_symbols,
+            "dmrs_scrm_id": dmrs_scrm_id,
+            "dmrs_syms": list(dmrs_syms),
+            "dmrs_max_len": dmrs_max_len,
+            "dmrs_add_ln_pos": dmrs_add_ln_pos,
+            "num_dmrs_cdm_grps_no_data": num_dmrs_cdm_grps_no_data,
+            "precoding_matrix": None,
+            "tb_size_bits": int(tb_size)
+        },
+        "Channel": {
+            "carrier_frequency": carrier_frequency,
+            "delay_spread": delay_spread,
+            "link_direction": link_direction,
+            "channel_model": re.sub(r"\s*(Low|Med|Medium|High)\s*$", "", channel_model, flags=re.IGNORECASE),
+            "speed": speed
+        },
+        "Algo": {
+            "use_trt": True,
+            "trt_engine": str(NRX_TRT_FILE)
+        }
     }
-}
 
-monitor = SimulationMonitor(cases, esno_db_range, config=cfg)
+    monitor = SimulationMonitor(cases, esno_db_range, config=cfg)
 
-# Loop the Es/No range.
-bler = []
-for esno_db in esno_db_range:
-    monitor.step(esno_db)
-    num_tb_errors = defaultdict(int)
-    
-    # Run multiple slots and compute BLER.
-    for slot_idx in range(num_slots):
-        slot_number = slot_idx % num_slots_per_frame                
-        
-        # Get modulation order and coderate.
-        tb_input_np = random_tb(
-            mod_order=mod_order,
-            code_rate=code_rate,
-            dmrs_syms=dmrs_syms,
-            num_prbs=num_prbs,
-            start_sym=start_sym,
-            num_symbols=num_symbols,
-            num_layers=layers)
-        tb_input = cp.array(tb_input_np, dtype=cp.uint8, order='F')
-        
-        # Transmit PUSCH. This is where we set the dynamically changing parameters.
-        # Input parameters are given as lists as the interface supports multiple UEs.
-        tx_tensor = pusch_tx.run(
-            tb_inputs=[tb_input],          # Input transport block in bytes.           
-            num_ues=1,                     # We simulate only one UE here.
-            slot=slot_number,              # Slot number.
-            num_dmrs_cdm_grps_no_data=num_dmrs_cdm_grps_no_data,
-            dmrs_scrm_ids=[dmrs_scrm_id],  # DMRS scrambling ID.
-            start_prb=start_prb,           # Start PRB index.
-            num_prbs=num_prbs,             # Number of allocated PRBs.
-            dmrs_syms=dmrs_syms,           # List of binary numbers indicating which symbols are DMRS.
-            start_sym=start_sym,           # Start symbol index.
-            num_symbols=num_symbols,       # Number of symbols.
-            scids=[scid],                  # DMRS scrambling ID.
-            layers=[layers],               # Number of layers (transmission rank).
-            dmrs_ports=[dmrs_ports],       # DMRS port(s) to be used.
-            rntis=[rnti],                  # UE RNTI.
-            data_scids=[data_scid],        # Data scrambling ID.
-            code_rates=[code_rate * 10],   # Code rate x 1024 x 10.
-            mod_orders=[mod_order]         # Modulation order.            
-        )
-                
-        # Channel transmission using TF and Sionna.
-        tx_tensor = tf.experimental.dlpack.from_dlpack(tx_tensor.toDlpack())
-        No = pow(10., -esno_db / 10.)
-        rx_tensor = apply_channel(tx_tensor, No)
-        rx_tensor = tf.experimental.dlpack.to_dlpack(rx_tensor)
-        rx_tensor = cp.from_dlpack(rx_tensor)        
-        
-        # Run the fused PUSCH receiver.
-        # Note that this is where we set the dynamically changing parameters.
-        tb_crcs, tbs = pusch_rx.run(
-            rx_slot=rx_tensor,           
-            slot=slot_number,
-            pusch_configs=pusch_configs
-        )
-        num_tb_errors["PUSCH Rx"] += int(np.array_equal(tbs[0], tb_input_np) == False)
-        
-        # Run the neural receiver.
-        tbs = neural_rx.run(
-            rx_slot=rx_tensor,
-            slot=slot_number,
-            pusch_configs=pusch_configs
-        )
-        num_tb_errors["Neural Rx"] += int(np.array_equal(tbs[0], tb_input_np) == False)
+    for esno_db in esno_db_range:
+        monitor.step(float(esno_db))
+        num_tb_errors = defaultdict(int)
 
-        monitor.update(num_tbs=slot_idx + 1, num_tb_errors=num_tb_errors)
-        if (np.array(list(num_tb_errors.values())) >= min_num_tb_errors).all():
-            break  # Next Es/No value.
-    
-    monitor.finish_step(num_tbs=slot_idx + 1, num_tb_errors=num_tb_errors)  
-monitor.finish()
+        for slot_idx in range(num_slots):
+            slot_number = slot_idx % num_slots_per_frame
 
-# Save results using monitor.save (raise on fatal errors; do not fallback to npz/json)
-out = monitor.save('results', 'neural_receiver_results', fmt='mat')
-print('Saved results to', out)
+            tb_input_np = random_tb(
+                mod_order=mod_order,
+                code_rate=code_rate,
+                dmrs_syms=dmrs_syms,
+                num_prbs=num_prbs,
+                start_sym=start_sym,
+                num_symbols=num_symbols,
+                num_layers=layers)
+            tb_input = cp.array(tb_input_np, dtype=cp.uint8, order='F')
+
+            tx_tensor = pusch_tx.run(
+                tb_inputs=[tb_input],
+                num_ues=1,
+                slot=slot_number,
+                num_dmrs_cdm_grps_no_data=num_dmrs_cdm_grps_no_data,
+                dmrs_scrm_ids=[dmrs_scrm_id],
+                start_prb=start_prb,
+                num_prbs=num_prbs,
+                dmrs_syms=dmrs_syms,
+                start_sym=start_sym,
+                num_symbols=num_symbols,
+                scids=[scid],
+                layers=[layers],
+                dmrs_ports=[dmrs_ports],
+                rntis=[rnti],
+                data_scids=[data_scid],
+                code_rates=[code_rate * 10],
+                mod_orders=[mod_order]
+            )
+
+            tx_tensor_tf = tf.experimental.dlpack.from_dlpack(tx_tensor.toDlpack())
+            No = pow(10., -float(esno_db) / 10.)
+            rx_tensor_tf = apply_channel(channel, tx_tensor_tf, No)
+            rx_tensor = cp.from_dlpack(tf.experimental.dlpack.to_dlpack(rx_tensor_tf))
+
+            tb_crcs, tbs = pusch_rx.run(
+                rx_slot=rx_tensor,
+                slot=slot_number,
+                pusch_configs=pusch_configs
+            )
+            num_tb_errors["PUSCH Rx"] += int(np.array_equal(tbs[0], tb_input_np) == False)
+
+            tbs = neural_rx.run(
+                rx_slot=rx_tensor,
+                slot=slot_number,
+                pusch_configs=pusch_configs
+            )
+            num_tb_errors["Neural Rx"] += int(np.array_equal(tbs[0], tb_input_np) == False)
+
+            monitor.update(num_tbs=slot_idx + 1, num_tb_errors=num_tb_errors)
+            if (np.array(list(num_tb_errors.values())) >= min_num_tb_errors).all():
+                break
+
+        monitor.finish_step(num_tbs=slot_idx + 1, num_tb_errors=num_tb_errors)
+
+    if SHOW_PLOTS:
+        monitor.finish()
+
+    out_dir = str((SCRIPT_DIR / 'results' / _slugify(scn_name)).resolve())
+    base_name = _slugify(f'neural_receiver_results_{scn_name}')
+    out = monitor.save(out_dir, base_name, fmt='mat')
+    print('Saved results to', out)
+    return out
+
+
+all_out = []
+for scn in SCENARIOS:
+    print("\n=== Running scenario:", scn["name"], "===")
+    all_out.append(run_scenario(scn))
+
+print("\nAll scenarios finished.")
+for p in all_out:
+    print(" -", p)
