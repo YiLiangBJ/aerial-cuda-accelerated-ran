@@ -474,7 +474,17 @@ for esno_db in esno_db_range:
             slot=slot_number,
             pusch_configs=pusch_configs
         )
-        num_tb_errors["PUSCH Rx"] += int(np.array_equal(tbs[0], tb_input_np) == False)
+        # Use CRC result for TB error accounting (0 = pass, nonzero = fail).
+        # Payload comparison can be misleading due to padding/undefined bytes.
+        try:
+            crc0 = tb_crcs[0]
+            if hasattr(crc0, "get"):
+                crc0 = crc0.get(order='F')
+            if hasattr(crc0, "item"):
+                crc0 = crc0.item()
+            num_tb_errors["PUSCH Rx"] += int(crc0 != 0)
+        except Exception:
+            num_tb_errors["PUSCH Rx"] += int(np.array_equal(tbs[0], tb_input_np) == False)
         
         # Run the neural receiver.
         tbs = neural_rx.run(

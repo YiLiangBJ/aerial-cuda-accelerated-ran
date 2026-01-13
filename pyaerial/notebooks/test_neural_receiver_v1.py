@@ -58,19 +58,20 @@ SCENARIOS = [
         "name": "mcs2_TDLB100-400",
         "mcs_index": 2,
         "channel_model": "TDLB100-400",
-        "esno_db_range": np.arange(-5.0, 15.0, 1.0),
+        # "channel_model": "Rayleigh",
+        "esno_db_range": np.arange(-5.0, 25.0, 3),
     },
     {
         "name": "mcs16_TDLC300-100",
         "mcs_index": 16,
         "channel_model": "TDLC300-100",
-        "esno_db_range": np.arange(5.0, 20.0, 1.0),
+        "esno_db_range": np.arange(5.0, 22.0, 3.0),
     },
     {
         "name": "mcs20_TDLA30-10",
         "mcs_index": 20,
         "channel_model": "TDLA30-10",
-        "esno_db_range": np.arange(5.0, 20.0, 1.0),
+        "esno_db_range": np.arange(5.0, 22.0, 3.0),
     },
 ]
 
@@ -623,6 +624,7 @@ def run_scenario(scn: dict) -> str:
                 slot=slot_number,
                 pusch_configs=pusch_configs
             )
+
             num_tb_errors["PUSCH Rx"] += int(np.array_equal(tbs[0], tb_input_np) == False)
 
             tbs = neural_rx.run(
